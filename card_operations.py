@@ -465,6 +465,138 @@ def get_review_interface_data():
         "stats": stats
     }
 
+def delete_card(card_id):
+    """
+    Delete a card from the database by its ID.
+    
+    Args:
+        card_id (int): The ID of the card to delete.
+        
+    Returns:
+        bool: True if deletion was successful, False otherwise.
+    """
+    try:
+        conn = sqlite3.connect(Path(db_path + "/excalibur.db").expanduser())
+        c = conn.cursor()
+        
+        # Delete the card from the schedulling table
+        c.execute("DELETE FROM schedulling WHERE id = ?", (card_id,))
+        
+        # Also delete related review logs for this card to avoid orphaned records
+        c.execute("DELETE FROM review_log WHERE card_id = ?", (card_id,))
+        
+        # Commit the changes and close the connection
+        conn.commit()
+        conn.close()
+        
+        return True
+    except Exception as e:
+        print(f"Error deleting card: {e}")
+        return False
 
+def update_card_content(card_id, side, content):
+    """
+    Update the content of a card (front or back).
+    
+    Args:
+        card_id (str): The ID of the card to update.
+        side (str): Either "front" or "back".
+        content (str): The new content.
+        
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    from pathlib import Path
+    from config import db_path
+    
+    if side not in ["front", "back"]:
+        return False
+    
+    file_path = Path(db_path + f"/cards/{card_id}_{side}.md").expanduser()
+    
+    try:
+        # Ensure directory exists
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write the content
+        with open(file_path, 'w') as f:
+            f.write(content)
+        
+        return True
+    except Exception as e:
+        print(f"Error updating card content: {e}")
+        return False
+
+def duplicate_card(card_id, new_tags=None):
+    """
+    Create a duplicate of an existing card.
+    
+    Args:
+        card_id (str): The ID of the card to duplicate.
+        new_tags (str, optional): Tags for the new card. If None, use original card's tags.
+        
+    Returns:
+        str: The ID of the new card, or None if failed.
+    """
+    import uuid
+    import sqlite3
+    from pathlib import Path
+    from config import db_path
+    
+    try:
+        # Load original card content
+        front_content, back_content = load_card_content(card_id)
+        
+        # Get original card's tags if not specified
+        if new_tags is None:
+            conn = sqlite3.connect(Path(db_path + "/excalibur.db").expanduser())
+            c = conn.cursor()
+            c.execute("SELECT tags FROM schedulling WHERE command = ?", (card_id,))
+            result = c.fetchone()
+            conn.close()
+            
+            if result and result[0]:
+                new_tags = result[0]
+            else:
+                new_tags = ""
+        
+        # Create a new card ID
+        new_card_id = str(uuid.uuid4())
+        
+        # Save the content to new files
+        update_card_content(new_card_id, "front", front_content)
+        update_card_content(new_card_id, "back", back_content)
+        
+        # Add the new card to the database
+        from db_operations import add_card
+        add_card(new_card_id, new_tags)
+        
+        return new_card_id
+    except Exception as e:
+        print(f"Error duplicating card: {e}")
+        return None
+
+def reset_card_state(card_id):
+    """
+    Reset a card's state to NEW but keep its content.
+    
+    Args:
+        card_id (str): The ID of the card to reset.
+        
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    from fsrs import Card
+    
+    try:
+        # Create a new card (which resets all progress)
+        new_card = Card()
+        
+        # Update the card in the database
+        update_card(card_id, new_card)
+        return True
+    except Exception as e:
+        print(f"Error resetting card: {e}")
+        return False
 
 
