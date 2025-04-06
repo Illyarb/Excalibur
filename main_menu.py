@@ -1,223 +1,279 @@
 import curses
+import datetime
+import math
 from typing import Dict, List, Set
 
 from base_ui import BaseUI
 from config import symbols
-from db_operations import get_cards_due, get_tags
-from card_operations import get_cards_by_tag
+import db_operations
+from card_operations import get_cards_by_tag, get_due_count
 from review_menu import ReviewMenu
 from add_menu import AddMenu
+from statistics import (
+    get_review_history_by_day,
+    get_cards_due_next_days,
+    get_advanced_stats,
+    draw_heatmap,
+    draw_calendar,
+    draw_statistics
+)
 
 
 class MainMenu(BaseUI):
     def __init__(self, stdscr):
         super().__init__(stdscr)
-        self.due_cards = get_cards_due()
-        self.tags = get_tags()
-        self.tag_due_counts = self.get_tag_due_counts()
+        self.due_cards = db_operations.get_cards_due()
+        self.tags = db_operations.get_tags()
+        self.tag_due_counts = db_operations.get_tag_due_counts()
         self.selected_tags = set(self.tags)
+        self.menu_items = [
+            ("Add new flashcard", 'a'),
+            ("Search cards", 's'),
+            ("Review", 'r'),
+            ("Toggle tag selection", 't'),
+            ("Quit", 'q')
+        ]
+        self.selected_menu_idx = 0
         self.selected_tag_idx = 0
-        self.show_tag_menu = False
+        self.tag_section_active = False
+        
+        self.review_counts = get_review_history_by_day()
+        self.due_counts = get_cards_due_next_days()
+        self.stats = get_advanced_stats()
+        
+        self.needs_full_redraw = True
+        
+        curses.start_color()
+        curses.use_default_colors()
+        for i in range(curses.COLORS):
+            curses.init_pair(i, i, -1)
     
-    def get_tag_due_counts(self) -> Dict[str, int]:
-        tag_counts = {}
-        
-        for tag in self.tags:
-            tag_counts[tag] = 0
-        
-        for card_id in self.due_cards:
-            card_tags = self.get_card_tags(card_id)
-            for tag in card_tags:
-                tag = tag.strip()
-                if tag in tag_counts:
-                    tag_counts[tag] += 1
-        
-        return tag_counts
+    def refresh_data(self):
+        self.due_cards = db_operations.get_cards_due()
+        self.tags = db_operations.get_tags()
+        self.tag_due_counts = db_operations.get_tag_due_counts()
+        self.review_counts = get_review_history_by_day()
+        self.due_counts = get_cards_due_next_days()
+        self.stats = get_advanced_stats()
+        self.needs_full_redraw = True
     
-    def get_card_tags(self, card_id) -> List[str]:
-        import sqlite3
-        from pathlib import Path
-        from config import db_path
+    def draw_safe_border(self, y, x, height, width, title=None):
+        max_height, max_width = self.stdscr.getmaxyx()
         
-        conn = sqlite3.connect(Path(db_path + "/excalibur.db").expanduser())
-        c = conn.cursor()
-        c.execute("SELECT tags FROM schedulling WHERE command = ?", (card_id,))
-        result = c.fetchone()
-        conn.close()
+        if y + height >= max_height:
+            height = max_height - y - 1
         
-        if result and result[0]:
-            return [tag.strip() for tag in result[0].split(',') if tag.strip()]
-        
-        return []
-    
-    def get_due_cards_for_selected_tags(self) -> List[str]:
-        if not self.selected_tags:
-            return []
-        
-        if set(self.tags) == self.selected_tags:
-            return self.due_cards
-        
-        filtered_cards = []
-        for card_id in self.due_cards:
-            card_tags = self.get_card_tags(card_id)
+        if x + width >= max_width:
+            width = max_width - x - 1
             
-            # More robust tag matching - normalize by stripping whitespace
-            normalized_card_tags = [tag.strip() for tag in card_tags]
-            normalized_selected_tags = [tag.strip() for tag in self.selected_tags]
-            
-            if any(tag in normalized_selected_tags for tag in normalized_card_tags):
-                filtered_cards.append(card_id)
+        self.stdscr.addstr(y, x, "╭" + "─" * (width - 2) + "╮", curses.color_pair(3))
         
-        return filtered_cards
-    
+        for i in range(1, height - 1):
+            self.stdscr.addstr(y + i, x, "│", curses.color_pair(3))
+            self.stdscr.addstr(y + i, x + width - 1, "│", curses.color_pair(3))
+        
+        try:
+            self.stdscr.addstr(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", curses.color_pair(3))
+        except curses.error:
+            self.stdscr.addstr(y + height - 1, x, "╰" + "─" * (width - 2), curses.color_pair(3))
+        
+        if title:
+            title = f" {title} "
+            title_x = x + (width - len(title)) // 2
+            self.stdscr.addstr(y, title_x, title, curses.color_pair(1) | curses.A_BOLD)
+
     def draw_main_menu(self):
-        self.stdscr.clear()
+        if self.needs_full_redraw:
+            self.stdscr.clear()
+            self.needs_full_redraw = False
+        
         height, width = self.stdscr.getmaxyx()
         
-        box_height = 16  
-        box_width = 60   
-        start_y = (height - box_height) // 2
-        start_x = (width - box_width) // 2
+        self.draw_safe_border(0, 0, height, width, "Excalibur Flashcards")
         
-        self.draw_border(start_y, start_x, box_height, box_width, "Excalibur")
-        self.due_cards = get_cards_due()
-        self.tags = get_tags()
-        self.tag_due_counts = self.get_tag_due_counts()
-        due_count = len(self.due_cards)
-        filtered_due_count = len(self.get_due_cards_for_selected_tags())
+        menu_width = 30
+        stats_width = width - menu_width - 3
         
-        due_info = f"Cards due: {filtered_due_count}"
-        due_x = start_x + (box_width - len(due_info)) // 2
-        self.stdscr.addstr(start_y + 2, due_x, due_info, curses.color_pair(4) | curses.A_BOLD)
+        for y in range(1, height - 1):
+            self.stdscr.addstr(y, menu_width, "│", curses.color_pair(3))
         
-        tag_info = f"Selected tags: {len(self.selected_tags)}/{len(self.tags)}"
-        tag_x = start_x + (box_width - len(tag_info)) // 2
-        self.stdscr.addstr(start_y + 3, tag_x, tag_info, curses.color_pair(9))
+        self.draw_menu_section(1, 1, menu_width - 1, height - 2)
         
-        self.stdscr.addstr(start_y + 4, start_x + 1, "─" * (box_width - 2), curses.color_pair(3))
-        
-        if self.show_tag_menu:
-            self.draw_tag_selection(start_y + 5, start_x + 2, box_width - 4)
-            self.stdscr.addstr(start_y + 12, start_x + 1, "─" * (box_width - 2), curses.color_pair(3))
-            menu_start_y = start_y + 13
-        else:
-            menu_start_y = start_y + 6
-        
-        menu_items = [
-            (f"{symbols['add']} a", "- Add new flashcard", 5),
-            (f"{symbols['search']} s", "- Search cards", 6),
-            (f"{symbols['review']} r", "- Review", 7),
-            (f"{symbols['stats']} x", "- Statistics", 8),
-            (f"{symbols['arrow']} q", "- Quit", 9),
-            (f"{symbols['tag'] if 'tag' in symbols else '#'} t", f"- {'Hide' if self.show_tag_menu else 'Show'} tags", 9)
-        ]
-        
-        content_x = start_x + 4
-        for i, (icon, text, color) in enumerate(menu_items):
-            row = i % 3
-            col = i // 3
-            col_offset = col * 25
-            self.stdscr.addstr(menu_start_y + row, content_x + col_offset, icon, curses.color_pair(3))
-            self.stdscr.addstr(menu_start_y + row, content_x + col_offset + 4, text, curses.color_pair(2))
+        self.draw_statistics_section(1, menu_width + 1, stats_width, height - 2)
         
         self.status_bar.clear()
     
-    def draw_tag_selection(self, start_y, start_x, width):
-        max_visible = 6
+    def draw_menu_section(self, start_y, start_x, width, height):
+        filtered_due_count = len(db_operations.get_cards_due_for_tags(self.selected_tags))
+        total_due = len(self.due_cards)
+        
+        self.stdscr.addstr(start_y, start_x, f"Cards due: {filtered_due_count}/{total_due}", curses.color_pair(4) | curses.A_BOLD)
+        
+        tag_status = f"Selected tags: {len(self.selected_tags)}/{len(self.tags)}"
+        if self.tag_section_active:
+            tag_status += " [ACTIVE]"
+        self.stdscr.addstr(start_y + 1, start_x, tag_status, curses.color_pair(9))
+        
+        self.stdscr.addstr(start_y + 2, start_x, "─" * width, curses.color_pair(3))
+        
+        tags_section_y = start_y + 3
+        self.draw_tag_section(tags_section_y, start_x, width)
+        
+        tag_section_height = min(10, len(self.tags) + 1)
+        divider_y = tags_section_y + tag_section_height
+        self.stdscr.addstr(divider_y, start_x, "─" * width, curses.color_pair(3))
+        
+        menu_start_y = divider_y + 1
+        self.stdscr.addstr(menu_start_y, start_x, "Menu Options:", curses.color_pair(1) | curses.A_BOLD)
+        
+        for i, (text, key) in enumerate(self.menu_items):
+            item_y = menu_start_y + i + 1
+            is_selected = i == self.selected_menu_idx and not self.tag_section_active
+            
+            style = curses.color_pair(3) | curses.A_BOLD if is_selected else curses.color_pair(2)
+            indicator = ">" if is_selected else " "
+            
+            menu_text = f"{indicator} {text} ({key})"
+            self.stdscr.addstr(item_y, start_x, menu_text, style)
+    
+    def draw_tag_section(self, start_y, start_x, width):
+        max_visible_tags = 8
+        
+        self.stdscr.addstr(start_y, start_x, "Tags:", curses.color_pair(1) | curses.A_BOLD)
         
         if not self.tags:
-            self.stdscr.addstr(start_y, start_x, "No tags available.", curses.color_pair(8))
+            self.stdscr.addstr(start_y + 1, start_x, "No tags available.", curses.color_pair(8))
             return
         
-        start_idx = max(0, min(self.selected_tag_idx - max_visible // 2, len(self.tags) - max_visible))
-        end_idx = min(start_idx + max_visible, len(self.tags))
-        
-        header = f"{'Tag':<20} {'Due':>5} {'Selected':<10}"
-        self.stdscr.addstr(start_y, start_x, header, curses.color_pair(1) | curses.A_BOLD)
-        start_y += 1
+        start_idx = max(0, min(self.selected_tag_idx - max_visible_tags // 2, len(self.tags) - max_visible_tags))
+        end_idx = min(start_idx + max_visible_tags, len(self.tags))
         
         for i, tag in enumerate(self.tags[start_idx:end_idx], start_idx):
-            if i == self.selected_tag_idx:
-                style = curses.color_pair(3) | curses.A_BOLD
-            else:
-                style = curses.color_pair(2)
+            item_y = start_y + 1 + (i - start_idx)
+            is_selected = i == self.selected_tag_idx and self.tag_section_active
             
-            tag_display = tag[:18] + ".." if len(tag) > 20 else tag.ljust(20)
+            style = curses.color_pair(3) | curses.A_BOLD if is_selected else curses.color_pair(2)
+            
+            tag_display = tag[:width - 15] + ".." if len(tag) > width - 13 else tag
+            checkbox = "[✓]" if tag in self.selected_tags else "[ ]"
+            indicator = ">" if is_selected else " "
             
             due_count = self.tag_due_counts.get(tag.strip(), 0)
+            tag_text = f"{indicator} {checkbox} {tag_display} ({due_count})"
             
-            checkbox = "[✓]" if tag in self.selected_tags else "[ ]"
-            
-            row = f"{tag_display} {due_count:5d} {checkbox}"
-            self.stdscr.addstr(start_y + i - start_idx, start_x, row, style)
+            self.stdscr.addstr(item_y, start_x, tag_text, style)
+    
+    def draw_statistics_section(self, start_y, start_x, width, height):
+        self.stdscr.addstr(start_y, start_x, "Statistics", curses.color_pair(1))
         
-        if self.tags:
-            instructions = [
-                "j/↓ - Move down",
-                "k/↑ - Move up",
-                "Space - Toggle selection",
-                "a - Select all",
-                "n - Select none"
-            ]
+        terminal_height, terminal_width = self.stdscr.getmaxyx()
+        
+        for i in range(curses.COLORS):
+            if i < 256:
+                try:
+                    curses.init_pair(i, i, -1)
+                except:
+                    pass
+        
+        heatmap_height = 15
+        heatmap_width = width
+        
+        heatmap_drawn = draw_heatmap(self.stdscr, start_y + 1, start_x, heatmap_width, self.review_counts)
+        
+        if heatmap_drawn:
+            calendar_start_y = start_y + heatmap_height + 2
             
-            inst_y = start_y + max_visible + 1
-            for i, instruction in enumerate(instructions):
-                if i < 3:
-                    inst_y += 1
+            if calendar_start_y + 11 <= terminal_height:
+                calendar_width = width // 2 - 2
+                
+                calendar_drawn = draw_calendar(self.stdscr, calendar_start_y, start_x, self.due_counts)
+                
+                if calendar_drawn and width >= 80:
+                    stats_start_x = start_x + calendar_width + 4
+                    draw_statistics(self.stdscr, calendar_start_y, stats_start_x, self.stats)
+                elif calendar_drawn and terminal_height - (calendar_start_y + 11) >= 12:
+                    stats_start_y = calendar_start_y + 11
+                    draw_statistics(self.stdscr, stats_start_y, start_x, self.stats)
+    
+    def handle_key_input(self, key):
+        if key == ord('q'):
+            return False
+        elif key == ord('a') and not self.tag_section_active:
+            add_menu = AddMenu(self.stdscr)
+            add_menu.run()
+            self.refresh_data()
+            return True
+        elif key == ord('s'):
+            self.draw_message("Search functionality coming soon!", "info")
+            return True
+        elif key == ord('r'):
+            filtered_due_cards = db_operations.get_cards_due_for_tags(self.selected_tags)
+            if not filtered_due_cards:
+                self.draw_message("No cards due for selected tags!", "info")
+                return True
+            review_menu = ReviewMenu(self.stdscr, selected_tags=self.selected_tags)
+            review_menu.run()
+            self.refresh_data()
+            return True
+        elif key == ord('t'):
+            self.tag_section_active = not self.tag_section_active
+            self.needs_full_redraw = True
+            return True
+        
+        if self.tag_section_active:
+            if key == ord('j') or key == curses.KEY_DOWN:
+                self.selected_tag_idx = min(len(self.tags) - 1, self.selected_tag_idx + 1)
+            elif key == ord('k') or key == curses.KEY_UP:
+                self.selected_tag_idx = max(0, self.selected_tag_idx - 1)
+            elif key == ord(' ') or key == ord('\n'):
+                if self.tags and 0 <= self.selected_tag_idx < len(self.tags):
+                    tag = self.tags[self.selected_tag_idx]
+                    if tag in self.selected_tags:
+                        self.selected_tags.remove(tag)
+                    else:
+                        self.selected_tags.add(tag)
+            elif key == 27:
+                self.tag_section_active = False
+        else:
+            if key == ord('j') or key == curses.KEY_DOWN:
+                self.selected_menu_idx = min(len(self.menu_items) - 1, self.selected_menu_idx + 1)
+            elif key == ord('k') or key == curses.KEY_UP:
+                self.selected_menu_idx = max(0, self.selected_menu_idx - 1)
+            elif key == ord('\n'):
+                if self.menu_items[self.selected_menu_idx][1] == 't':
+                    self.tag_section_active = True
+                    self.needs_full_redraw = True
                 else:
-                    self.stdscr.addstr(inst_y - 3, start_x + width // 2, instruction, curses.color_pair(8))
-
+                    menu_key = self.menu_items[self.selected_menu_idx][1]
+                    return self.handle_key_input(ord(menu_key))
+        
+        return True
+    
     def run(self):
+        curses.curs_set(0)
         while True:
             self.update_dimensions()
-            
             self.draw_main_menu()
+            self.stdscr.refresh()
             
             key = self.stdscr.getch()
             
-            if key == ord('q'):
+            if not self.handle_key_input(key):
                 break
-            elif key == ord('a'):
-                add_menu = AddMenu(self.stdscr)
-                add_menu.run()
-                self.stdscr.clear()
-            elif key == ord('r'):
-                filtered_due_cards = self.get_due_cards_for_selected_tags()
-
-                if not filtered_due_cards:
-                    self.draw_message("No cards due for selected tags!", "info")
-                    continue
-
-                review_menu = ReviewMenu(self.stdscr, selected_tags=self.selected_tags)
-                review_menu.run()
-                self.stdscr.clear()
-
-            elif key == ord('s'):
-                self.draw_message("Search functionality coming soon!", "info")
-            elif key == ord('x'):
-                self.draw_message("Statistics functionality coming soon!", "info")
-            elif key == ord('t'):
-                self.show_tag_menu = not self.show_tag_menu
-
-            elif self.show_tag_menu:
-                if key == ord('j') or key == curses.KEY_DOWN:
-                    self.selected_tag_idx = min(len(self.tags) - 1, self.selected_tag_idx + 1)
-                elif key == ord('k') or key == curses.KEY_UP:
-                    self.selected_tag_idx = max(0, self.selected_tag_idx - 1)
-                elif key == ord(' '):
-                    if self.tags and 0 <= self.selected_tag_idx < len(self.tags):
-                        tag = self.tags[self.selected_tag_idx]
-                        if tag in self.selected_tags:
-                            self.selected_tags.remove(tag)
-                        else:
-                            self.selected_tags.add(tag)
-                elif key == ord('a'):
-                    self.selected_tags = set(self.tags)
-                elif key == ord('n'):
-                        self.selected_tags = set()
 
 
 def main(stdscr):
+    curses.curs_set(0)
+    stdscr.nodelay(0)
+    
+    curses.start_color()
+    curses.use_default_colors()
+    for i in range(min(curses.COLORS, 256)):
+        try:
+            curses.init_pair(i, i, -1)
+        except:
+            pass
+    
     ui = MainMenu(stdscr)
     ui.run()
 
