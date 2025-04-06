@@ -19,12 +19,9 @@ from card_operations import (
     get_card_by_id
 )
 
-# Rich imports for markdown rendering
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.align import Align
-from rich.text import Text
-from rich.panel import Panel
+# Replace Rich with custom renderer
+from renderer import render_markdown
+
 from fsrs import Scheduler, Card, Rating
 
 
@@ -232,7 +229,7 @@ class ReviewUI:
         self.stdscr.addstr(y + height - 1, x, "╰" + "─" * (width - 2) + "╯", curses.color_pair(3))
     
     def run(self):
-        """Display the review interface for reviewing cards with centered markdown using Rich."""
+        """Display the review interface using the custom markdown renderer."""
         # Get all due cards
         due_cards = get_all_cards_due()
 
@@ -256,9 +253,6 @@ class ReviewUI:
         # Save current terminal state
         curses.def_prog_mode()
         curses.endwin()
-
-        # Initialize Rich console
-        console = Console()
 
         while not exit_review and current_card_idx < len(due_cards):
             # Get current card
@@ -285,27 +279,12 @@ class ReviewUI:
                 print(" " * terminal_width, end="")
                 print(f"\033[1;1H", end="")
             
-            # Calculate vertical centering for the card content
-            content_lines = (front_content if not show_answer else back_content).count('\n') + 6  # Add buffer for markdown rendering
+            # Display content using the custom renderer
+            content = front_content if not show_answer else back_content
             
-            # Calculate padding for vertical centering (leave room for status bar)
-            padding_lines = max(0, (terminal_height - content_lines - 1) // 2 - 2)
-            
-            # Print top padding
-            for _ in range(padding_lines):
-                console.print("")
-            
-            # Display content with proper centering
-            if not show_answer:
-                # Display front of card
-                md = Markdown(front_content, justify="center")
-                panel = Panel(md, border_style="none", expand=False, padding=(0, 2))
-                console.print(Align.center(panel))
-            else:
-                # Display back of card
-                md = Markdown(back_content, justify="center")
-                panel = Panel(md, border_style="none", expand=False, padding=(0, 2))
-                console.print(Align.center(panel))
+            # Use custom markdown renderer instead of Rich
+            rendered_content = render_markdown(content)
+            print(rendered_content)
             
             # Get user input
             try:
@@ -335,7 +314,7 @@ class ReviewUI:
                 elif key == 'q':
                     exit_review = True
             except Exception as e:
-                console.print(f"Error: {e}")
+                print(f"\033[31mError: {e}\033[0m")
                 import time
                 time.sleep(2)
 
@@ -351,11 +330,12 @@ class ReviewUI:
             
             # Print top padding
             for _ in range(padding_lines):
-                console.print("")
+                print("")
                 
             # Create a simple centered completion message
-            completion_message = Text("Congratulations! You've completed all due cards!", style="bold green")
-            console.print(Align.center(completion_message))
+            completion_message = "Congratulations! You've completed all due cards!"
+            padding = (terminal_width - len(completion_message)) // 2
+            print(" " * padding + "\033[1;32m" + completion_message + "\033[0m")
             
             # Wait for a keypress before returning
             self.get_keypress()

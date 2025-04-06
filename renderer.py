@@ -650,9 +650,34 @@ class EnhancedMarkdownRenderer:
         
         return result
 
-def render_markdown(md_text: str, colored_output: bool = True) -> str:
+def render_markdown(md_text: str, colored_output: bool = True, centered: bool = False) -> str:
     import sys
-    return EnhancedMarkdownRenderer(sys.stdout.isatty()).render(md_text)
+    
+    # Generate the rendered markdown content
+    renderer = EnhancedMarkdownRenderer(colored_output=colored_output)
+    result = renderer.render(md_text)
+    
+    if centered:
+        # Clear screen ANSI sequence
+        clear_screen = "\033[2J\033[H"  # Clear screen and position cursor at top-left
+        
+        # Get terminal dimensions
+        try:
+            terminal_width, terminal_height = shutil.get_terminal_size()
+        except (AttributeError, ValueError, OSError):
+            terminal_width, terminal_height = 80, 24
+        
+        # Count lines in the rendered content
+        rendered_lines = result.splitlines()
+        content_height = len(rendered_lines)
+        
+        # Calculate vertical padding
+        top_padding = max(0, (terminal_height - content_height) // 2)
+        
+        # Add vertical centering with empty lines at the top
+        result = clear_screen + ("\n" * top_padding) + result
+    
+    return result
 
 if __name__ == "__main__":
     import sys

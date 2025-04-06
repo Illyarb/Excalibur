@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 import uuid
 
-# Import from our modules
 from config import db_path, editor, ui_colors, symbols, colors
 from db_operations import get_cards_due
 
@@ -27,7 +26,6 @@ class BaseUI:
         curses.start_color()
         curses.use_default_colors()
         
-        # Define color pairs based on ui_colors
         curses.init_pair(1, ui_colors["title"], -1)  # Title
         curses.init_pair(2, ui_colors["menu_item"], -1)  # Menu item
         curses.init_pair(3, ui_colors["selected_item"], -1)  # Selected item
@@ -47,7 +45,6 @@ class BaseUI:
         curses.init_pair(15, colors["cyan"], ui_colors["status_bar"])    # Easy (cyan)
 
     def draw_message(self, message: str, message_type="info"):
-        """Draw a message in the status bar"""
         self.status_bar.clear()
         color_map = {
             "info": 8,      # Info color
@@ -84,43 +81,34 @@ class BaseUI:
 
     def get_user_input(self, prompt: str) -> str:
         """Get text input from the user with a prompt."""
-        # Save current terminal state
         self.stdscr.clear()
         height, width = self.stdscr.getmaxyx()
         
-        # Draw input box
         input_box_width = 50
         input_box_height = 5
         box_y = (height - input_box_height) // 2
         box_x = (width - input_box_width) // 2
         
-        # Draw input box border
         self.draw_border(box_y, box_x, input_box_height, input_box_width, "Input")
         
-        # Show prompt
         self.stdscr.addstr(box_y + 2, box_x + 3, prompt, curses.color_pair(2))
         self.stdscr.refresh()
         
-        # Create input window for user text
         input_win = curses.newwin(1, input_box_width - 6 - len(prompt), box_y + 2, box_x + 3 + len(prompt))
         input_win.keypad(True)
         
-        # Show cursor for input
         curses.curs_set(1)
         curses.echo()
         
-        # Get input
         input_win.refresh()
         text = input_win.getstr().decode('utf-8')
         
-        # Hide cursor again
         curses.noecho()
         curses.curs_set(0)
         
         return text
     
     def update_dimensions(self):
-        """Update terminal dimensions and status bar position"""
         self.height, self.width = self.stdscr.getmaxyx()
         self.status_bar.resize(1, self.width)
         self.status_bar.mvwin(self.height-1, 0)

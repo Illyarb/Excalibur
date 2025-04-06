@@ -75,7 +75,6 @@ def get_cards_due():
     conn.close()
     
     # Debug output to help troubleshoot
-    print(f"Found {len(cards)} cards due at {current_time}")
     
     return [card[0] for card in cards]
 
